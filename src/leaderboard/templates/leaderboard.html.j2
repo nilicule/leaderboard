@@ -92,9 +92,12 @@
 
   {% if restricted_total %}
   <p class="notice">
-    {{ restricted_total }} contribution{{ '' if restricted_total == 1 else 's' }} were hidden
-    from this token, so these counts are a lower bound. Granting the token the
-    <code>repo</code> scope reveals contributions to private repositories.
+    GitHub reports {{ restricted_total }} contribution{{ '' if restricted_total == 1 else 's' }}
+    as hidden from this token. Commit counts come from the repository API and are
+    unaffected, but pull request, review and issue counts are read from the
+    contributions API and so are a lower bound. No token scope changes this —
+    GitHub withholds private contributions unless each member enables
+    <em>Include private contributions on my profile</em> in their own settings.
   </p>
   {% endif %}
   {% if scrape_failures %}

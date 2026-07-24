@@ -188,9 +188,11 @@ def _print_summary(
     restricted = sum(m.contributions.restricted for m in members)
     if restricted:
         print(
-            f"\nNote: GitHub hid {restricted:,} contributions from this token, "
-            "so these counts are a lower bound. Add the 'repo' scope to include "
-            "private repositories."
+            f"\nNote: GitHub reports {restricted:,} contributions as hidden from "
+            "this token. Commit counts come from the repository API and are "
+            "unaffected; PR, review and issue counts are a lower bound. No token "
+            "scope changes this — members must enable 'Include private "
+            "contributions on my profile' themselves."
         )
     missing = sum(1 for m in members if m.stats_missing)
     if missing:
