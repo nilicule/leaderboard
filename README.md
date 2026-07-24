@@ -8,9 +8,9 @@ showing each member's avatar and profile achievement badges.
 
 - Python 3.13 or newer
 - [uv](https://docs.astral.sh/uv/)
-- A `GITHUB_TOKEN` in the environment with the `read:org` scope. Add the `repo`
-  scope to include contributions to private repositories; without it GitHub
-  hides them and the report says so.
+- A `GITHUB_TOKEN` in the environment with the `read:org` and `repo` scopes.
+  `read:org` enumerates members; `repo` reads commits from private
+  repositories, which is where most of the signal lives in a company org.
 
 ## Usage
 
@@ -44,6 +44,32 @@ login. Achievements are shown but do not affect the score.
 
 To retune, edit the weight constants at the top of `src/leaderboard/scoring.py`.
 
+## Where the numbers come from
+
+The two metrics use different GitHub APIs, for a reason worth knowing about.
+
+**Commits** are counted from the REST repository API: every org repo pushed
+within the window is scanned via `/repos/{owner}/{repo}/commits`, and commits
+are tallied by author login. Only commits whose email is linked to a GitHub
+account can be attributed; unlinked commits are skipped.
+
+**Pull requests, reviews and issues** come from the GraphQL
+`contributionsCollection`, scoped to the organisation.
+
+The split exists because `contributionsCollection` does **not** report
+contributions to private repositories. GitHub returns them as
+`restrictedContributionsCount` instead — a count of work it declines to
+attribute. On an org whose repositories are all private, that makes the GraphQL
+commit count zero for every member, no matter what scopes the token holds. The
+only way to surface those contributions through that API is for each member to
+enable *Include private contributions on my profile* in their own account
+settings, which is not something an org admin can do on their behalf.
+
+Reading commits from the repository API sidesteps this entirely. Pull request,
+review and issue counts remain subject to it, so the report states how many
+contributions GitHub withheld whenever that number is non-zero — treat those
+three columns as a lower bound.
+
 ## A caveat about achievements
 
 GitHub exposes achievements through neither its REST nor its GraphQL API, so
@@ -59,5 +85,6 @@ whether the page structure still matches what the parser expects.
 uv run pytest
 ```
 
-Tests cover the scoring maths and the achievement parser (against a saved
-fixture page) and use no network access.
+68 tests covering the scoring maths, the achievement parser (against a saved
+fixture page), the commit counter, the GraphQL query builder and the CLI. None
+of them touch the network.
