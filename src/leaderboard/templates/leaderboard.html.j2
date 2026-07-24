@@ -60,9 +60,11 @@
   td.score { font-weight: 700; color: var(--accent); font-variant-numeric: tabular-nums; }
   td.num { font-variant-numeric: tabular-nums; color: var(--muted); }
   .badges { display: flex; gap: .3rem; flex-wrap: wrap; }
-  .podium .badges { justify-content: center; margin-top: .5rem; }
   .badge { position: relative; width: 26px; height: 26px; }
   .badge img { width: 100%; height: 100%; border-radius: 50%; display: block; }
+  .badge.tier-bronze img { box-shadow: 0 0 0 2px #b3703b; }
+  .badge.tier-silver img { box-shadow: 0 0 0 2px #a5abb3; }
+  .badge.tier-gold   img { box-shadow: 0 0 0 2px #d4a029; }
   .badge .mult {
     position: absolute; right: -4px; bottom: -3px; background: var(--bg); color: var(--fg);
     border: 1px solid var(--line); border-radius: 6px; font-size: .58rem;
@@ -74,19 +76,6 @@
 </style>
 </head>
 <body>
-{% set tier_colors = {"bronze": "#b3703b", "silver": "#a5abb3", "gold": "#d4a029"} %}
-{% macro render_badges(achievements) %}
-<span class="badges">
-  {% for badge in achievements %}
-  <span class="badge{% if badge.tier %} tier-{{ badge.tier }}{% endif %}"
-        title="{{ badge.name }}{% if badge.count > 1 %} x{{ badge.count }}{% endif %}">
-    <img src="{{ images.get(badge.image_url, badge.image_url) }}" alt="{{ badge.name }}" loading="lazy"
-         {% if badge.tier in tier_colors %}style="box-shadow: 0 0 0 2px {{ tier_colors[badge.tier] }}"{% endif %}>
-    {% if badge.count > 1 %}<span class="mult">x{{ badge.count }}</span>{% endif %}
-  </span>
-  {% endfor %}
-</span>
-{% endmacro %}
 <div class="wrap">
 
   <header>
@@ -125,16 +114,12 @@
       <img class="avatar" src="{{ images.get(entry.member.avatar_url, entry.member.avatar_url) }}"
            alt="{{ entry.member.display_name }}">
       <div class="who">{{ entry.member.display_name }}</div>
-      <div class="login">
-        @{{ entry.member.login }}{% if entry.member.stats_missing %}<span class="missing"> · no data</span>{% endif %}
-      </div>
+      <div class="login">@{{ entry.member.login }}</div>
       <div class="pts">{{ '{:,}'.format(entry.score) }} pts</div>
-      {% if entry.member.achievements %}{{ render_badges(entry.member.achievements) }}{% endif %}
     </a>
     {% endfor %}
   </div>
 
-  {% if rest %}
   <table id="board">
     <thead>
       <tr>
@@ -150,7 +135,7 @@
       </tr>
     </thead>
     <tbody>
-      {% for entry in rest %}
+      {% for entry in ranked %}
       <tr>
         <td class="rank" data-value="{{ entry.rank }}">{{ entry.rank }}</td>
         <td data-value="{{ entry.member.display_name | lower }}">
@@ -170,12 +155,21 @@
         <td class="num" data-value="{{ entry.member.contributions.reviews }}">{{ entry.member.contributions.reviews }}</td>
         <td class="num" data-value="{{ entry.member.contributions.issues }}">{{ entry.member.contributions.issues }}</td>
         <td class="num" data-value="{{ entry.member.contributions.repositories }}">{{ entry.member.contributions.repositories }}</td>
-        <td data-value="{{ entry.member.achievements | length }}">{{ render_badges(entry.member.achievements) }}</td>
+        <td data-value="{{ entry.member.achievements | length }}">
+          <span class="badges">
+            {% for badge in entry.member.achievements %}
+            <span class="badge{% if badge.tier %} tier-{{ badge.tier }}{% endif %}"
+                  title="{{ badge.name }}{% if badge.count > 1 %} x{{ badge.count }}{% endif %}">
+              <img src="{{ images.get(badge.image_url, badge.image_url) }}" alt="{{ badge.name }}" loading="lazy">
+              {% if badge.count > 1 %}<span class="mult">x{{ badge.count }}</span>{% endif %}
+            </span>
+            {% endfor %}
+          </span>
+        </td>
       </tr>
       {% endfor %}
     </tbody>
   </table>
-  {% endif %}
   {% endif %}
 
   <footer>

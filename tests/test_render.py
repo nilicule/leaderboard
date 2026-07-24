@@ -52,8 +52,18 @@ def test_report_makes_no_external_requests():
 
 
 def test_every_member_gets_an_avatar():
-    html = render([scored("alice", 1, 10), scored("bob", 2, 5)])
-    assert html.count("class=\"avatar\"") == 2
+    # Top 3 appear twice: once on the podium, once in the full table.
+    ranked = [scored("alice", 1, 10), scored("bob", 2, 5)]
+    html = render(ranked)
+    assert html.count('class="avatar"') == 4  # 2 podium + 2 table
+    for entry in ranked:
+        assert f'alt="{entry.member.display_name}"' in html
+
+
+def test_table_lists_every_member_including_the_podium():
+    ranked = [scored(name, i + 1, 100 - i) for i, name in enumerate("abcd")]
+    html = render(ranked)
+    assert html.count('class="avatar"') == 7  # 3 podium + 4 table
 
 
 def test_achievements_render_with_tier_and_multiplier():
@@ -66,10 +76,14 @@ def test_achievements_render_with_tier_and_multiplier():
     assert "Pull Shark" in html
 
 
-def test_member_without_achievements_renders_without_error():
+def test_member_without_achievements_renders_no_badge_elements():
     html = render([scored("alice", 1, 10)])
     assert "alice" in html
-    assert "tier-" not in html
+    # "badges" (the always-present wrapper) contains "badge" as a substring, so
+    # match the per-badge element's own class value precisely rather than the
+    # wrapper's.
+    assert '<span class="badge"' not in html
+    assert '<span class="badge ' not in html
 
 
 def test_scores_and_metrics_appear():

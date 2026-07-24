@@ -77,7 +77,6 @@ def render_html(
         organization=organization,
         ranked=ranked,
         podium=ranked[:3],
-        rest=ranked[3:],
         images=images,
         days=days,
         generated_at=generated_at.strftime("%Y-%m-%d %H:%M UTC"),
