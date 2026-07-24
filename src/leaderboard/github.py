@@ -32,6 +32,8 @@ fragment Stats on User {
     totalPullRequestReviewContributions
     totalIssueContributions
     totalRepositoriesWithContributedCommits
+  }
+  unfilteredContributionsCollection: contributionsCollection(from: $from, to: $to) {
     restrictedContributionsCount
   }
 }
@@ -209,6 +211,9 @@ class GitHubClient:
     @staticmethod
     def _apply_node(member: Member, node: dict) -> None:
         collection = node.get("contributionsCollection") or {}
+        # organizationID scoping makes GitHub always report restrictedContributionsCount
+        # as 0, so the real count is read from the unfiltered collection instead.
+        unfiltered = node.get("unfilteredContributionsCollection") or {}
         member.name = node.get("name")
         member.avatar_url = node.get("avatarUrl") or member.avatar_url
         member.profile_url = node.get("url") or member.profile_url
@@ -218,5 +223,5 @@ class GitHubClient:
             reviews=collection.get("totalPullRequestReviewContributions", 0),
             issues=collection.get("totalIssueContributions", 0),
             repositories=collection.get("totalRepositoriesWithContributedCommits", 0),
-            restricted=collection.get("restrictedContributionsCount", 0),
+            restricted=unfiltered.get("restrictedContributionsCount", 0),
         )
