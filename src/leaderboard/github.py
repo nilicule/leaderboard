@@ -185,6 +185,11 @@ class GitHubClient:
                     },
                 },
             )
+            if response.status_code in (401, 403):
+                raise GitHubError(
+                    "GitHub refused to fetch contributions data. "
+                    "Check that GITHUB_TOKEN is valid and carries the 'read:org' and 'repo' scopes."
+                )
             response.raise_for_status()
             body = response.json()
             data = body.get("data") or {}
