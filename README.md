@@ -51,7 +51,13 @@ The two metrics use different GitHub APIs, for a reason worth knowing about.
 **Commits** are counted from the REST repository API: every org repo pushed
 within the window is scanned via `/repos/{owner}/{repo}/commits`, and commits
 are tallied by author login. Only commits whose email is linked to a GitHub
-account can be attributed; unlinked commits are skipped.
+account can be attributed; unlinked commits are skipped. Forks are excluded
+from the scan entirely — a fork's commit history is the upstream project's
+history, so scanning it would credit upstream work to this org. Merge commits
+are counted (GitHub's own contribution graph counts them too, and they are a
+meaningful share of commits in an active org), and only commits reachable from
+each repository's default branch are seen, since that is all the endpoint
+returns.
 
 **Pull requests, reviews and issues** come from the GraphQL
 `contributionsCollection`, scoped to the organisation.
@@ -85,6 +91,6 @@ whether the page structure still matches what the parser expects.
 uv run pytest
 ```
 
-68 tests covering the scoring maths, the achievement parser (against a saved
+94 tests covering the scoring maths, the achievement parser (against a saved
 fixture page), the commit counter, the GraphQL query builder and the CLI. None
 of them touch the network.

@@ -1,9 +1,16 @@
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from leaderboard.cli import apply_commit_counts, main, parse_args, resolve_window
-from leaderboard.models import Contributions, Member
+from leaderboard.cli import (
+    EXIT_CONFIG,
+    apply_commit_counts,
+    main,
+    parse_args,
+    resolve_window,
+    write_report,
+)
+from leaderboard.models import Contributions, Member, Organization, ScoredMember
 
 
 def test_org_is_required():
@@ -85,3 +92,70 @@ def test_apply_commit_counts_leaves_other_contribution_fields_untouched():
     apply_commit_counts(members, {"carol": 5})
     contributions = members[0].contributions
     assert (contributions.pull_requests, contributions.reviews, contributions.issues) == (9, 9, 9)
+
+
+def _organization():
+    return Organization(login="acme", name="Acme", node_id="O_1", avatar_url="")
+
+
+def _scored(login, rank, score, commits=0):
+    member = _member(login, commits=commits)
+    return ScoredMember(member=member, score=score, rank=rank)
+
+
+def test_print_summary_reports_restricted_total_passed_in_not_recomputed(capsys):
+    from leaderboard.cli import _print_summary
+
+    members = [_member("alice")]
+    ranked = [_scored("alice", 1, 10)]
+    _print_summary(
+        _organization(), ranked, members, scrape_failures=0, repo_failures=0,
+        restricted_total=99, output="out.html",
+    )
+    out = capsys.readouterr().out
+    assert "99 contributions" in out
+    assert "across all of GitHub" in out
+
+
+def test_print_summary_reports_repo_failures_when_nonzero(capsys):
+    from leaderboard.cli import _print_summary
+
+    members = [_member("alice")]
+    ranked = [_scored("alice", 1, 10)]
+    _print_summary(
+        _organization(), ranked, members, scrape_failures=0, repo_failures=4,
+        restricted_total=0, output="out.html",
+    )
+    out = capsys.readouterr().out
+    assert "4 repositor" in out
+
+
+def test_print_summary_omits_repo_failure_note_when_zero(capsys):
+    from leaderboard.cli import _print_summary
+
+    members = [_member("alice")]
+    ranked = [_scored("alice", 1, 10)]
+    _print_summary(
+        _organization(), ranked, members, scrape_failures=0, repo_failures=0,
+        restricted_total=0, output="out.html",
+    )
+    out = capsys.readouterr().out
+    assert "repositor" not in out
+
+
+def test_write_report_writes_the_file(tmp_path):
+    output = tmp_path / "out.html"
+    assert write_report(output, "<html></html>") is None
+    assert output.read_text(encoding="utf-8") == "<html></html>"
+
+
+def test_write_report_guards_an_unwritable_path(tmp_path, capsys):
+    # The parent directory does not exist, so write_text raises OSError.
+    bad_path = tmp_path / "missing-dir" / "out.html"
+    result = write_report(bad_path, "<html></html>")
+    assert result == EXIT_CONFIG
+    err = capsys.readouterr().err
+    assert "Could not write" in err
+    assert str(bad_path) in err
+
+
