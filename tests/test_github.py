@@ -6,6 +6,8 @@ import pytest
 from leaderboard.github import (
     BATCH_SIZE,
     GitHubClient,
+    GitHubError,
+    _is_rate_limited,
     build_contributions_query,
     retry_delay,
 )
@@ -74,6 +76,68 @@ def test_retry_delay_falls_back_to_exponential_backoff():
 def test_retry_delay_is_capped():
     response = httpx.Response(429, headers={"Retry-After": "99999"})
     assert retry_delay(response, attempt=0) == 60.0
+
+
+def test_403_with_zero_remaining_is_rate_limited():
+    response = httpx.Response(403, headers={"X-RateLimit-Remaining": "0"})
+    assert _is_rate_limited(response) is True
+
+
+def test_403_with_retry_after_is_a_secondary_rate_limit_even_with_remaining():
+    response = httpx.Response(
+        403,
+        headers={"X-RateLimit-Remaining": "42", "Retry-After": "5"},
+    )
+    assert _is_rate_limited(response) is True
+
+
+def test_403_mentioning_secondary_rate_limit_in_body_is_rate_limited():
+    response = httpx.Response(
+        403,
+        headers={"X-RateLimit-Remaining": "42"},
+        json={"message": "You have exceeded a secondary rate limit."},
+    )
+    assert _is_rate_limited(response) is True
+
+
+@pytest.mark.asyncio
+async def test_get_organization_raises_a_clear_error_on_a_malformed_payload():
+    def handler(request: httpx.Request) -> httpx.Response:
+        # Missing "login" and "node_id" — must not raise a bare KeyError.
+        return httpx.Response(200, json={"name": "Acme"})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+        client = GitHubClient(token="fake", client=http_client)
+        with pytest.raises(GitHubError):
+            await client.get_organization("acme")
+
+
+@pytest.mark.asyncio
+async def test_request_follows_redirects():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/orgs/old-name":
+            return httpx.Response(
+                301, headers={"Location": "https://api.github.com/orgs/new-name"}
+            )
+        if request.url.path == "/orgs/new-name":
+            return httpx.Response(200, json={"ok": True})
+        raise AssertionError(f"unexpected request: {request.url}")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+        client = GitHubClient(token="fake", client=http_client)
+        response = await client.request("GET", "https://api.github.com/orgs/old-name")
+
+    assert response.status_code == 200
+    assert response.json() == {"ok": True}
+
+
+def test_403_with_remaining_and_no_retry_after_or_secondary_message_is_not_rate_limited():
+    response = httpx.Response(
+        403,
+        headers={"X-RateLimit-Remaining": "42"},
+        json={"message": "Forbidden"},
+    )
+    assert _is_rate_limited(response) is False
 
 
 @pytest.mark.asyncio

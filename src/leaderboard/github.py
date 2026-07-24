@@ -72,10 +72,19 @@ def retry_delay(response: httpx.Response, attempt: int) -> float:
 def _is_rate_limited(response: httpx.Response) -> bool:
     if response.status_code == 429:
         return True
-    return (
-        response.status_code == 403
-        and response.headers.get("X-RateLimit-Remaining") == "0"
-    )
+    if response.status_code != 403:
+        return False
+    if response.headers.get("X-RateLimit-Remaining") == "0":
+        return True
+    # GitHub's secondary rate limit returns 403 with a non-zero remaining
+    # count; a Retry-After header or a message naming it is the only signal.
+    if response.headers.get("Retry-After"):
+        return True
+    try:
+        body = response.text
+    except Exception:
+        body = ""
+    return "secondary rate limit" in body.lower()
 
 
 class GitHubClient:
@@ -92,7 +101,7 @@ class GitHubClient:
     async def request(self, method: str, url: str, **kwargs) -> httpx.Response:
         for attempt in range(MAX_ATTEMPTS):
             response = await self._client.request(
-                method, url, headers=self._headers, **kwargs
+                method, url, headers=self._headers, follow_redirects=True, **kwargs
             )
             if not _is_rate_limited(response):
                 return response
@@ -119,10 +128,17 @@ class GitHubClient:
             )
         response.raise_for_status()
         data = response.json()
+        login = data.get("login")
+        node_id = data.get("node_id")
+        if not login or not node_id:
+            raise GitHubError(
+                f"GitHub returned an unexpected response for organisation '{org}' "
+                "(missing 'login' or 'node_id')."
+            )
         return Organization(
-            login=data["login"],
-            name=data.get("name") or data["login"],
-            node_id=data["node_id"],
+            login=login,
+            name=data.get("name") or login,
+            node_id=node_id,
             avatar_url=data.get("avatar_url", ""),
         )
 

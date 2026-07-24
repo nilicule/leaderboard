@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime
+from urllib.parse import urlparse
 
 from .github import REST_ROOT, GitHubClient
 
@@ -82,7 +83,13 @@ async def _count_repo_commits(
                     for key, count in counts.items():
                         tally[key] = tally.get(key, 0) + count
 
-            url = response.links.get("next", {}).get("url")
+            next_url = response.links.get("next", {}).get("url")
+            if next_url and urlparse(next_url).netloc != "api.github.com":
+                # An authenticated request only ever goes back to the API host
+                # it came from; anything else could be leaking the token to a
+                # third party via a spoofed Link header.
+                next_url = None
+            url = next_url
             params = None
 
 
@@ -98,40 +105,40 @@ async def find_scannable_repos(
     return [
         repo
         for repo in repos
-        if (pushed_at := _parse_pushed_at(repo)) is not None and pushed_at >= since
+        if not repo.get("fork")
+        and (pushed_at := _parse_pushed_at(repo)) is not None
+        and pushed_at >= since
     ]
 
 
 async def count_org_commits(
     api: GitHubClient,
-    org: str,
+    repos: list[dict],
     since: datetime,
     until: datetime,
     concurrency: int = 8,
-    repos: list[dict] | None = None,
-) -> dict[str, int]:
-    """Return a mapping of lowercased GitHub login to commit count.
+) -> tuple[dict[str, int], int]:
+    """Return (lowercased-login -> commit count, number of repos that failed).
 
-    Only repos pushed to since `since` are scanned, since anything older
-    cannot contain a commit inside the window. Pass `repos` (as returned by
-    `find_scannable_repos`) to reuse an already-fetched list instead of
-    listing the org's repos again.
+    A repo whose request errors (rate limit exhaustion, a transient 5xx, a
+    network error, ...) is counted as failed rather than aborting the whole
+    scan — losing a handful of repos out of hundreds is far better than
+    discarding the entire run. Pass `repos` as returned by
+    `find_scannable_repos`.
     """
-    candidates = repos if repos is not None else await find_scannable_repos(
-        api, org, since
-    )
-
     tally: dict[str, int] = {}
     lock = asyncio.Lock()
     semaphore = asyncio.Semaphore(concurrency)
 
-    await asyncio.gather(
+    results = await asyncio.gather(
         *(
             _count_repo_commits(
                 api, repo["full_name"], since, until, tally, lock, semaphore
             )
-            for repo in candidates
-        )
+            for repo in repos
+        ),
+        return_exceptions=True,
     )
 
-    return tally
+    failed = sum(1 for result in results if isinstance(result, BaseException))
+    return tally, failed

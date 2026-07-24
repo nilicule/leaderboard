@@ -127,8 +127,8 @@ async def _run(args: argparse.Namespace, token: str) -> int:
 
         repos_to_scan = await find_scannable_repos(api, organization.login, since)
         print(f"Counting commits across {len(repos_to_scan)} repositories…")
-        commit_counts = await count_org_commits(
-            api, organization.login, since, until, repos=repos_to_scan
+        commit_counts, repo_failures = await count_org_commits(
+            api, repos_to_scan, since, until
         )
         apply_commit_counts(members, commit_counts)
 
@@ -140,9 +140,10 @@ async def _run(args: argparse.Namespace, token: str) -> int:
             scrape_failures = await fetch_all_achievements(http, members)
 
         ranked = rank_members(members)
+        restricted_total = sum(m.contributions.restricted for m in members)
 
         print("Embedding images…")
-        images = await build_image_cache(
+        images, image_failures = await build_image_cache(
             http,
             [organization.avatar_url]
             + [m.avatar_url for m in members]
@@ -155,24 +156,57 @@ async def _run(args: argparse.Namespace, token: str) -> int:
             images=images,
             days=args.days,
             generated_at=until,
-            restricted_total=sum(m.contributions.restricted for m in members),
+            restricted_total=restricted_total,
             scrape_failures=scrape_failures,
+            repo_failures=repo_failures,
+            image_failures=image_failures,
         )
 
     output = Path(args.output)
-    output.write_text(html, encoding="utf-8")
-    _print_summary(organization, ranked, members, scrape_failures, output)
+    write_error = write_report(output, html)
+    if write_error is not None:
+        return write_error
+
+    _print_summary(
+        organization,
+        ranked,
+        members,
+        scrape_failures=scrape_failures,
+        repo_failures=repo_failures,
+        restricted_total=restricted_total,
+        output=output,
+    )
 
     if args.open:
         webbrowser.open(output.resolve().as_uri())
     return EXIT_OK
 
 
+def write_report(output: Path, html: str) -> int | None:
+    """Write the report to disk, returning an exit code on failure, else None.
+
+    By the time this runs the process has already done the org lookup, the
+    member list, every GraphQL and REST call, every profile scrape and every
+    image download. A bad --output path (typo, missing directory, permission
+    error) must not turn that work into an unhandled traceback with nothing
+    written anywhere.
+    """
+    try:
+        output.write_text(html, encoding="utf-8")
+    except OSError as error:
+        print(f"Could not write {output}: {error}", file=sys.stderr)
+        return EXIT_CONFIG
+    return None
+
+
 def _print_summary(
     organization: Organization,
     ranked: list[ScoredMember],
     members: list,
+    *,
     scrape_failures: int,
+    repo_failures: int,
+    restricted_total: int,
     output: Path,
 ) -> None:
     print(f"\n{organization.name} — top {min(len(ranked), 10)}")
@@ -185,20 +219,22 @@ def _print_summary(
             f"{len(entry.member.achievements):>2} badges"
         )
 
-    restricted = sum(m.contributions.restricted for m in members)
-    if restricted:
+    if restricted_total:
         print(
-            f"\nNote: GitHub reports {restricted:,} contributions as hidden from "
-            "this token. Commit counts come from the repository API and are "
-            "unaffected; PR, review and issue counts are a lower bound. No token "
-            "scope changes this — members must enable 'Include private "
-            "contributions on my profile' themselves."
+            f"\nNote: PR, review and issue counts are a lower bound. GitHub declines to\n"
+            f"attribute {restricted_total:,} contributions for these members across all of GitHub;\n"
+            "commit counts come from the repository API and are unaffected."
         )
     missing = sum(1 for m in members if m.stats_missing)
     if missing:
         print(f"Note: GitHub returned no statistics for {missing} member(s).")
     if scrape_failures:
         print(f"Note: achievement badges were unavailable for {scrape_failures} member(s).")
+    if repo_failures:
+        print(
+            f"Note: commits could not be read for {repo_failures} "
+            f"repositor{'y' if repo_failures == 1 else 'ies'}; those commits are missing from these counts."
+        )
 
     print(f"\nWrote {output}")
 
