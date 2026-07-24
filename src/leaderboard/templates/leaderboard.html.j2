@@ -92,18 +92,30 @@
 
   {% if restricted_total %}
   <p class="notice">
-    GitHub reports {{ restricted_total }} contribution{{ '' if restricted_total == 1 else 's' }}
-    as hidden from this token. Commit counts come from the repository API and are
-    unaffected, but pull request, review and issue counts are read from the
-    contributions API and so are a lower bound. No token scope changes this —
-    GitHub withholds private contributions unless each member enables
-    <em>Include private contributions on my profile</em> in their own settings.
+    Pull request, review and issue counts are a lower bound. GitHub declines to
+    attribute {{ restricted_total }} contribution{{ '' if restricted_total == 1 else 's' }}
+    for these members across all of GitHub — commit counts are read from the
+    repository API and are unaffected. No token scope changes this; each member
+    controls it via <em>Include private contributions on my profile</em> in their
+    own account settings.
   </p>
   {% endif %}
   {% if scrape_failures %}
   <p class="notice">
     Achievement badges could not be read for {{ scrape_failures }}
     member{{ '' if scrape_failures == 1 else 's' }}. Their other statistics are unaffected.
+  </p>
+  {% endif %}
+  {% if repo_failures %}
+  <p class="notice">
+    Commits could not be read for {{ repo_failures }} repositor{{ 'y' if repo_failures == 1 else 'ies' }}.
+    Those commits are missing from these counts.
+  </p>
+  {% endif %}
+  {% if image_failures %}
+  <p class="notice">
+    {{ image_failures }} image{{ '' if image_failures == 1 else 's' }} could not be embedded
+    and {{ 'is' if image_failures == 1 else 'are' }} shown as placeholder{{ '' if image_failures == 1 else 's' }}.
   </p>
   {% endif %}
 
@@ -115,7 +127,7 @@
     {% for entry in podium %}
     <a href="{{ entry.member.profile_url }}">
       <div class="medal">{{ ['🥇','🥈','🥉'][loop.index0] }}</div>
-      <img class="avatar" src="{{ images.get(entry.member.avatar_url, entry.member.avatar_url) }}"
+      <img class="avatar" src="{{ images.get(entry.member.avatar_url, placeholder) }}"
            alt="{{ entry.member.display_name }}">
       <div class="who">{{ entry.member.display_name }}</div>
       <div class="login">@{{ entry.member.login }}</div>
@@ -144,12 +156,12 @@
         <td class="rank" data-value="{{ entry.rank }}">{{ entry.rank }}</td>
         <td data-value="{{ entry.member.display_name | lower }}">
           <span class="who-cell">
-            <img class="avatar" src="{{ images.get(entry.member.avatar_url, entry.member.avatar_url) }}"
+            <img class="avatar" src="{{ images.get(entry.member.avatar_url, placeholder) }}"
                  alt="{{ entry.member.display_name }}" loading="lazy">
             <span>
               <a href="{{ entry.member.profile_url }}">{{ entry.member.display_name }}</a><br>
               <span class="login">@{{ entry.member.login }}</span>
-              {% if entry.member.stats_missing %}<span class="missing"> · no data</span>{% endif %}
+              {% if entry.member.stats_missing %}<span class="missing"> · no PR/review/issue data</span>{% endif %}
             </span>
           </span>
         </td>
@@ -164,7 +176,7 @@
             {% for badge in entry.member.achievements %}
             <span class="badge{% if badge.tier %} tier-{{ badge.tier }}{% endif %}"
                   title="{{ badge.name }}{% if badge.count > 1 %} x{{ badge.count }}{% endif %}">
-              <img src="{{ images.get(badge.image_url, badge.image_url) }}" alt="{{ badge.name }}" loading="lazy">
+              <img src="{{ images.get(badge.image_url, placeholder) }}" alt="{{ badge.name }}" loading="lazy">
               {% if badge.count > 1 %}<span class="mult">x{{ badge.count }}</span>{% endif %}
             </span>
             {% endfor %}

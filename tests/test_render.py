@@ -4,7 +4,7 @@ import httpx
 import pytest
 
 from leaderboard.models import Achievement, Contributions, Member, Organization, ScoredMember
-from leaderboard.render import build_image_cache, render_html
+from leaderboard.render import PLACEHOLDER_IMAGE, build_image_cache, render_html
 
 ORG = Organization(login="acme", name="Acme", node_id="O_1", avatar_url="https://x/org.png")
 NOW = datetime(2026, 7, 24, 12, 0, tzinfo=timezone.utc)
@@ -29,6 +29,8 @@ def render(ranked, images=None, **kwargs) -> str:
         generated_at=NOW,
         restricted_total=0,
         scrape_failures=0,
+        repo_failures=0,
+        image_failures=0,
     )
     return render_html(ORG, ranked, **{**defaults, **kwargs})
 
@@ -49,6 +51,17 @@ def test_report_makes_no_external_requests():
     assert "data:image/png;base64,AAAA" in html
     for forbidden in ("<script src=", "<link rel=\"stylesheet\"", "cdn.", "fonts.googleapis"):
         assert forbidden not in html
+
+
+def test_report_with_no_cached_images_still_makes_no_external_requests():
+    # This is the test that actually proves the offline guarantee: previous
+    # coverage only ever exercised a fully-populated cache, so a fallback to
+    # the remote URL on a failed download would have gone unnoticed.
+    badge = Achievement(
+        name="Pull Shark", slug="pull-shark", image_url="https://x/shark.png", tier="bronze", count=2
+    )
+    html = render([scored("alice", 1, 100, [badge])], images={})
+    assert 'src="http' not in html
 
 
 def test_every_member_gets_an_avatar():
@@ -96,17 +109,49 @@ def test_scores_and_metrics_appear():
 def test_restricted_contributions_are_disclosed():
     html = render([scored("alice", 1, 10)], restricted_total=17)
     assert "17" in html
-    assert "hidden" in html.lower()
+    assert "across all of GitHub" in html
+    assert "commit counts are read from the" in html.lower()
 
 
 def test_no_disclosure_when_nothing_was_restricted():
     html = render([scored("alice", 1, 10)], restricted_total=0)
-    assert "hidden from this token" not in html.lower()
+    assert "across all of GitHub" not in html
 
 
 def test_scrape_failures_are_disclosed():
     html = render([scored("alice", 1, 10)], scrape_failures=3)
-    assert "3" in html
+    assert "Achievement badges could not be read for 3" in html
+
+
+def test_no_scrape_failure_notice_when_zero():
+    html = render([scored("alice", 1, 10)], scrape_failures=0)
+    assert "Achievement badges could not be read" not in html
+
+
+def test_repo_failures_are_disclosed():
+    html = render([scored("alice", 1, 10)], repo_failures=2)
+    assert "Commits could not be read for 2 repositories" in html
+
+
+def test_repo_failures_singular_wording():
+    html = render([scored("alice", 1, 10)], repo_failures=1)
+    assert "Commits could not be read for 1 repository." in html
+
+
+def test_no_repo_failure_notice_when_zero():
+    html = render([scored("alice", 1, 10)], repo_failures=0)
+    assert "Commits could not be read for" not in html
+
+
+def test_image_failures_are_disclosed():
+    html = render([scored("alice", 1, 10)], image_failures=4)
+    assert "4 image" in html
+    assert "placeholder" in html.lower()
+
+
+def test_no_image_failure_notice_when_zero():
+    html = render([scored("alice", 1, 10)], image_failures=0)
+    assert "could not be embedded" not in html
 
 
 def test_login_is_escaped_rather_than_injected():
@@ -122,27 +167,54 @@ def test_empty_leaderboard_renders_a_placeholder():
     assert "No members" in html
 
 
+def test_stats_missing_wording_does_not_imply_no_data_at_all():
+    # A stats_missing member can still have a real REST commit count and a
+    # non-zero score, so "no data" overstates it.
+    entry = scored("alice", 1, 10)
+    entry.member.stats_missing = True
+    html = render([entry])
+    assert "no PR/review/issue data" in html
+    assert "· no data" not in html
+
+
 @pytest.mark.asyncio
 async def test_image_cache_embeds_as_data_uris():
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, content=b"\x89PNG-bytes", headers={"content-type": "image/png"})
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-        cache = await build_image_cache(client, ["https://x/a.png", "https://x/a.png"])
+        cache, failures = await build_image_cache(client, ["https://x/a.png", "https://x/a.png"])
 
     assert list(cache) == ["https://x/a.png"]
     assert cache["https://x/a.png"].startswith("data:image/png;base64,")
+    assert failures == 0
 
 
 @pytest.mark.asyncio
-async def test_image_cache_falls_back_to_the_remote_url_on_failure():
+async def test_image_cache_falls_back_to_a_placeholder_on_failure():
+    # Falling back to the remote URL would silently break the "renders fully
+    # offline" guarantee on a single flaky download; a placeholder keeps it.
     def handler(request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("boom", request=request)
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
-        cache = await build_image_cache(client, ["https://x/a.png"])
+        cache, failures = await build_image_cache(client, ["https://x/a.png"])
 
-    assert cache["https://x/a.png"] == "https://x/a.png"
+    assert cache["https://x/a.png"] == PLACEHOLDER_IMAGE
+    assert not cache["https://x/a.png"].startswith("http")
+    assert failures == 1
+
+
+@pytest.mark.asyncio
+async def test_image_cache_falls_back_to_a_placeholder_on_non_200():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        cache, failures = await build_image_cache(client, ["https://x/a.png"])
+
+    assert cache["https://x/a.png"] == PLACEHOLDER_IMAGE
+    assert failures == 1
 
 
 @pytest.mark.asyncio
@@ -150,4 +222,7 @@ async def test_image_cache_ignores_empty_urls():
     async with httpx.AsyncClient(
         transport=httpx.MockTransport(lambda r: httpx.Response(200, content=b"x"))
     ) as client:
-        assert await build_image_cache(client, ["", None]) == {}
+        cache, failures = await build_image_cache(client, ["", None])
+
+    assert cache == {}
+    assert failures == 0
