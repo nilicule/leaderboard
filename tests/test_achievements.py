@@ -96,7 +96,9 @@ async def test_populates_achievements_for_each_member():
 
 
 @pytest.mark.asyncio
-async def test_non_200_response_yields_no_badges_and_counts_as_a_failure():
+async def test_404_response_yields_empty_achievements_and_is_not_a_failure():
+    # GitHub returns 404 on the achievements tab for a user with zero badges,
+    # as distinct from a 200 profile page. That is a successful, empty fetch.
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(404, text="Not Found")
 
@@ -104,8 +106,43 @@ async def test_non_200_response_yields_no_badges_and_counts_as_a_failure():
     async with client_returning(handler) as client:
         failures = await fetch_all_achievements(client, members)
 
+    assert failures == 0
+    assert members[0].achievements == []
+
+
+@pytest.mark.asyncio
+async def test_non_404_error_response_still_counts_as_a_failure():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(500, text="Internal Server Error")
+
+    members = [make_member("ghost")]
+    async with client_returning(handler) as client:
+        failures = await fetch_all_achievements(client, members)
+
     assert failures == 1
     assert members[0].achievements == []
+
+
+@pytest.mark.asyncio
+async def test_mixed_batch_404_200_and_connection_error():
+    fixture = load_fixture()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        url = str(request.url)
+        if "no-badges" in url:
+            return httpx.Response(404, text="Not Found")
+        if "broken" in url:
+            raise httpx.ConnectError("boom", request=request)
+        return httpx.Response(200, text=fixture)
+
+    members = [make_member("no-badges"), make_member("has-badges"), make_member("broken")]
+    async with client_returning(handler) as client:
+        failures = await fetch_all_achievements(client, members)
+
+    assert failures == 1
+    assert members[0].achievements == []
+    assert len(members[1].achievements) == 5
+    assert members[2].achievements == []
 
 
 @pytest.mark.asyncio

@@ -125,7 +125,12 @@ async def _fetch_one(
     login: str,
     semaphore: asyncio.Semaphore,
 ) -> list[Achievement] | None:
-    """Return badges for one login, or None if the page could not be read."""
+    """Return badges for one login, or None if the page could not be read.
+
+    GitHub returns 404 for the achievements tab of a user who has zero
+    badges (as opposed to their bare profile, which is 200), so a 404 here
+    is a successful, empty fetch rather than a failure.
+    """
     try:
         async with semaphore:
             response = await client.get(
@@ -134,6 +139,8 @@ async def _fetch_one(
                 follow_redirects=True,
                 timeout=REQUEST_TIMEOUT,
             )
+        if response.status_code == 404:
+            return []
         if response.status_code != 200:
             return None
         return parse_achievements(response.text)
