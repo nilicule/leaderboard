@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ organization.name }} — Activity Leaderboard</title>
+<style>
+  :root {
+    --bg: #ffffff; --fg: #1f2328; --muted: #59636e; --line: #d1d9e0;
+    --card: #f6f8fa; --accent: #0969da; --shadow: rgba(31,35,40,.08);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0d1117; --fg: #e6edf3; --muted: #9198a1; --line: #30363d;
+      --card: #151b23; --accent: #4493f8; --shadow: rgba(0,0,0,.4);
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 2rem 1rem 4rem; background: var(--bg); color: var(--fg);
+    font: 15px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  }
+  .wrap { max-width: 1100px; margin: 0 auto; }
+  header { display: flex; align-items: center; gap: 1rem; margin-bottom: .5rem; }
+  header img { width: 56px; height: 56px; border-radius: 12px; }
+  h1 { font-size: 1.6rem; margin: 0; letter-spacing: -.02em; }
+  .sub { color: var(--muted); font-size: .9rem; margin: .15rem 0 0; }
+  .notice {
+    background: var(--card); border: 1px solid var(--line); border-left: 3px solid var(--accent);
+    border-radius: 6px; padding: .6rem .9rem; margin: 1.25rem 0; font-size: .85rem; color: var(--muted);
+  }
+  .podium { display: flex; gap: 1rem; margin: 2rem 0; flex-wrap: wrap; }
+  .podium a {
+    flex: 1 1 200px; text-decoration: none; color: inherit; text-align: center;
+    background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+    padding: 1.25rem 1rem; box-shadow: 0 1px 3px var(--shadow); transition: transform .12s;
+  }
+  .podium a:hover { transform: translateY(-2px); }
+  .podium .medal { font-size: 1.75rem; line-height: 1; }
+  .podium img.avatar { width: 76px; height: 76px; border-radius: 50%; margin: .5rem 0 .4rem; }
+  .podium .who { font-weight: 600; }
+  .podium .pts { color: var(--accent); font-weight: 700; font-size: 1.1rem; margin-top: .3rem; }
+  table { width: 100%; border-collapse: collapse; margin-top: 1rem; }
+  th, td { padding: .55rem .5rem; text-align: right; border-bottom: 1px solid var(--line); }
+  th:nth-child(-n+2), td:nth-child(-n+2) { text-align: left; }
+  th:last-child, td:last-child { text-align: left; }
+  th {
+    font-size: .72rem; text-transform: uppercase; letter-spacing: .05em;
+    color: var(--muted); cursor: pointer; user-select: none; white-space: nowrap;
+  }
+  th:hover { color: var(--fg); }
+  th::after { content: " ⇅"; opacity: .35; }
+  tbody tr:hover { background: var(--card); }
+  td.rank { color: var(--muted); font-variant-numeric: tabular-nums; width: 3rem; }
+  .who-cell { display: flex; align-items: center; gap: .6rem; }
+  img.avatar { width: 34px; height: 34px; border-radius: 50%; flex: none; }
+  .who-cell a { color: inherit; text-decoration: none; font-weight: 600; }
+  .who-cell a:hover { color: var(--accent); }
+  .login { color: var(--muted); font-weight: 400; font-size: .85em; }
+  td.score { font-weight: 700; color: var(--accent); font-variant-numeric: tabular-nums; }
+  td.num { font-variant-numeric: tabular-nums; color: var(--muted); }
+  .badges { display: flex; gap: .3rem; flex-wrap: wrap; }
+  .podium .badges { justify-content: center; margin-top: .5rem; }
+  .badge { position: relative; width: 26px; height: 26px; }
+  .badge img { width: 100%; height: 100%; border-radius: 50%; display: block; }
+  .badge .mult {
+    position: absolute; right: -4px; bottom: -3px; background: var(--bg); color: var(--fg);
+    border: 1px solid var(--line); border-radius: 6px; font-size: .58rem;
+    font-weight: 700; padding: 0 2px; line-height: 1.3;
+  }
+  .missing { font-style: italic; color: var(--muted); }
+  .empty { text-align: center; color: var(--muted); padding: 3rem 0; }
+  footer { margin-top: 2rem; color: var(--muted); font-size: .8rem; }
+</style>
+</head>
+<body>
+{% set tier_colors = {"bronze": "#b3703b", "silver": "#a5abb3", "gold": "#d4a029"} %}
+{% macro render_badges(achievements) %}
+<span class="badges">
+  {% for badge in achievements %}
+  <span class="badge{% if badge.tier %} tier-{{ badge.tier }}{% endif %}"
+        title="{{ badge.name }}{% if badge.count > 1 %} x{{ badge.count }}{% endif %}">
+    <img src="{{ images.get(badge.image_url, badge.image_url) }}" alt="{{ badge.name }}" loading="lazy"
+         {% if badge.tier in tier_colors %}style="box-shadow: 0 0 0 2px {{ tier_colors[badge.tier] }}"{% endif %}>
+    {% if badge.count > 1 %}<span class="mult">x{{ badge.count }}</span>{% endif %}
+  </span>
+  {% endfor %}
+</span>
+{% endmacro %}
+<div class="wrap">
+
+  <header>
+    <img src="{{ org_avatar }}" alt="">
+    <div>
+      <h1>{{ organization.name }} — Activity Leaderboard</h1>
+      <p class="sub">
+        Last {{ days }} days · {{ ranked | length }} member{{ '' if ranked | length == 1 else 's' }} ·
+        generated {{ generated_at }}
+      </p>
+    </div>
+  </header>
+
+  {% if restricted_total %}
+  <p class="notice">
+    {{ restricted_total }} contribution{{ '' if restricted_total == 1 else 's' }} were hidden
+    from this token, so these counts are a lower bound. Granting the token the
+    <code>repo</code> scope reveals contributions to private repositories.
+  </p>
+  {% endif %}
+  {% if scrape_failures %}
+  <p class="notice">
+    Achievement badges could not be read for {{ scrape_failures }}
+    member{{ '' if scrape_failures == 1 else 's' }}. Their other statistics are unaffected.
+  </p>
+  {% endif %}
+
+  {% if not ranked %}
+  <p class="empty">No members to show.</p>
+  {% else %}
+
+  <div class="podium">
+    {% for entry in podium %}
+    <a href="{{ entry.member.profile_url }}">
+      <div class="medal">{{ ['🥇','🥈','🥉'][loop.index0] }}</div>
+      <img class="avatar" src="{{ images.get(entry.member.avatar_url, entry.member.avatar_url) }}"
+           alt="{{ entry.member.display_name }}">
+      <div class="who">{{ entry.member.display_name }}</div>
+      <div class="login">
+        @{{ entry.member.login }}{% if entry.member.stats_missing %}<span class="missing"> · no data</span>{% endif %}
+      </div>
+      <div class="pts">{{ '{:,}'.format(entry.score) }} pts</div>
+      {% if entry.member.achievements %}{{ render_badges(entry.member.achievements) }}{% endif %}
+    </a>
+    {% endfor %}
+  </div>
+
+  {% if rest %}
+  <table id="board">
+    <thead>
+      <tr>
+        <th data-type="num">#</th>
+        <th data-type="text">Member</th>
+        <th data-type="num">Score</th>
+        <th data-type="num">Commits</th>
+        <th data-type="num">PRs</th>
+        <th data-type="num">Reviews</th>
+        <th data-type="num">Issues</th>
+        <th data-type="num">Repos</th>
+        <th data-type="num">Achievements</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for entry in rest %}
+      <tr>
+        <td class="rank" data-value="{{ entry.rank }}">{{ entry.rank }}</td>
+        <td data-value="{{ entry.member.display_name | lower }}">
+          <span class="who-cell">
+            <img class="avatar" src="{{ images.get(entry.member.avatar_url, entry.member.avatar_url) }}"
+                 alt="{{ entry.member.display_name }}" loading="lazy">
+            <span>
+              <a href="{{ entry.member.profile_url }}">{{ entry.member.display_name }}</a><br>
+              <span class="login">@{{ entry.member.login }}</span>
+              {% if entry.member.stats_missing %}<span class="missing"> · no data</span>{% endif %}
+            </span>
+          </span>
+        </td>
+        <td class="score" data-value="{{ entry.score }}">{{ '{:,}'.format(entry.score) }}</td>
+        <td class="num" data-value="{{ entry.member.contributions.commits }}">{{ '{:,}'.format(entry.member.contributions.commits) }}</td>
+        <td class="num" data-value="{{ entry.member.contributions.pull_requests }}">{{ entry.member.contributions.pull_requests }}</td>
+        <td class="num" data-value="{{ entry.member.contributions.reviews }}">{{ entry.member.contributions.reviews }}</td>
+        <td class="num" data-value="{{ entry.member.contributions.issues }}">{{ entry.member.contributions.issues }}</td>
+        <td class="num" data-value="{{ entry.member.contributions.repositories }}">{{ entry.member.contributions.repositories }}</td>
+        <td data-value="{{ entry.member.achievements | length }}">{{ render_badges(entry.member.achievements) }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+  {% endif %}
+
+  <footer>
+    Scored as commits×1 + pull requests×5 + reviews×3 + issues×2, counting only
+    contributions to {{ organization.login }} repositories.
+  </footer>
+</div>
+
+<script>
+(function () {
+  var table = document.getElementById('board');
+  if (!table) return;
+  table.querySelectorAll('th').forEach(function (th, column) {
+    var descending = true;
+    th.addEventListener('click', function () {
+      var body = table.tBodies[0];
+      var numeric = th.dataset.type === 'num';
+      Array.from(body.rows)
+        .sort(function (a, b) {
+          var x = a.cells[column].dataset.value, y = b.cells[column].dataset.value;
+          var result = numeric ? (Number(x) - Number(y)) : String(x).localeCompare(String(y));
+          return descending ? -result : result;
+        })
+        .forEach(function (row) { body.appendChild(row); });
+      descending = !descending;
+    });
+  });
+})();
+</script>
+</body>
+</html>
