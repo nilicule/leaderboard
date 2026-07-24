@@ -8,11 +8,13 @@ badge list rather than propagating.
 
 from __future__ import annotations
 
+import asyncio
 import re
 
+import httpx
 from bs4 import BeautifulSoup
 
-from .models import Achievement
+from .models import Achievement, Member
 
 _ALT_PREFIX = "Achievement: "
 _SLUG_RE = re.compile(r"/achievements/([^/?#]+)")
@@ -83,3 +85,57 @@ def _tier_and_count(img) -> tuple[str | None, int]:
         tier_match.group(1) if tier_match else None,
         int(count_match.group(1)) if count_match else 1,
     )
+
+
+PROFILE_URL = "https://github.com/{login}?tab=achievements"
+USER_AGENT = "leaderboard-script (+https://github.com)"
+REQUEST_TIMEOUT = 20.0
+
+
+async def fetch_all_achievements(
+    client: httpx.AsyncClient,
+    members: list[Member],
+    concurrency: int = 8,
+) -> int:
+    """Fill in each member's achievements, returning how many fetches failed.
+
+    Scraping is best-effort by design: a member whose page cannot be read or
+    parsed simply shows no badges, and the leaderboard is otherwise unaffected.
+    """
+    if not members:
+        return 0
+
+    semaphore = asyncio.Semaphore(concurrency)
+    results = await asyncio.gather(
+        *(_fetch_one(client, member.login, semaphore) for member in members)
+    )
+
+    failures = 0
+    for member, badges in zip(members, results):
+        if badges is None:
+            member.achievements = []
+            failures += 1
+        else:
+            member.achievements = badges
+    return failures
+
+
+async def _fetch_one(
+    client: httpx.AsyncClient,
+    login: str,
+    semaphore: asyncio.Semaphore,
+) -> list[Achievement] | None:
+    """Return badges for one login, or None if the page could not be read."""
+    try:
+        async with semaphore:
+            response = await client.get(
+                PROFILE_URL.format(login=login),
+                headers={"User-Agent": USER_AGENT},
+                follow_redirects=True,
+                timeout=REQUEST_TIMEOUT,
+            )
+        if response.status_code != 200:
+            return None
+        return parse_achievements(response.text)
+    except Exception:
+        return None

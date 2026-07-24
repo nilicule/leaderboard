@@ -62,3 +62,84 @@ def test_malformed_html_returns_empty_list_instead_of_raising():
 def test_badge_missing_a_hovercard_url_is_skipped():
     html = '<a><img data-hovercard-type="achievement" alt="Achievement: Mystery" src="x.png"></a>'
     assert parse_achievements(html) == []
+
+
+import httpx
+import pytest
+
+from leaderboard.achievements import fetch_all_achievements
+from leaderboard.models import Member
+
+
+def make_member(login: str) -> Member:
+    return Member(login=login, name=None, avatar_url="", profile_url="")
+
+
+def client_returning(handler) -> httpx.AsyncClient:
+    return httpx.AsyncClient(transport=httpx.MockTransport(handler))
+
+
+@pytest.mark.asyncio
+async def test_populates_achievements_for_each_member():
+    fixture = load_fixture()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert "tab=achievements" in str(request.url)
+        return httpx.Response(200, text=fixture)
+
+    members = [make_member("alice"), make_member("bob")]
+    async with client_returning(handler) as client:
+        failures = await fetch_all_achievements(client, members)
+
+    assert failures == 0
+    assert all(len(m.achievements) == 5 for m in members)
+
+
+@pytest.mark.asyncio
+async def test_non_200_response_yields_no_badges_and_counts_as_a_failure():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, text="Not Found")
+
+    members = [make_member("ghost")]
+    async with client_returning(handler) as client:
+        failures = await fetch_all_achievements(client, members)
+
+    assert failures == 1
+    assert members[0].achievements == []
+
+
+@pytest.mark.asyncio
+async def test_network_error_does_not_abort_the_run():
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("boom", request=request)
+
+    members = [make_member("a"), make_member("b")]
+    async with client_returning(handler) as client:
+        failures = await fetch_all_achievements(client, members)
+
+    assert failures == 2
+    assert all(m.achievements == [] for m in members)
+
+
+@pytest.mark.asyncio
+async def test_one_failure_does_not_affect_other_members():
+    fixture = load_fixture()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "broken" in str(request.url):
+            raise httpx.ConnectError("boom", request=request)
+        return httpx.Response(200, text=fixture)
+
+    members = [make_member("good"), make_member("broken")]
+    async with client_returning(handler) as client:
+        failures = await fetch_all_achievements(client, members)
+
+    assert failures == 1
+    assert len(members[0].achievements) == 5
+    assert members[1].achievements == []
+
+
+@pytest.mark.asyncio
+async def test_empty_member_list_reports_no_failures():
+    async with client_returning(lambda r: httpx.Response(200, text="")) as client:
+        assert await fetch_all_achievements(client, []) == 0
