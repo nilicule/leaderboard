@@ -54,7 +54,7 @@ async def _embed(
             )
         if response.status_code != 200:
             return url
-        mime = (response.headers.get("content-type") or "image/png").split(";")[0]
+        mime = (response.headers.get("content-type") or "image/png").split(";")[0].strip()
         payload = base64.b64encode(response.content).decode("ascii")
         return f"data:{mime};base64,{payload}"
     except Exception:
