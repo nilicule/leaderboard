@@ -7,14 +7,16 @@ import asyncio
 import os
 import sys
 import webbrowser
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import httpx
 
 from .achievements import fetch_all_achievements
+from .commits import count_org_commits, find_scannable_repos
 from .github import GitHubClient, GitHubError
-from .models import Organization, ScoredMember
+from .models import Member, Organization, ScoredMember
 from .render import build_image_cache, render_html
 from .scoring import rank_members
 
@@ -53,6 +55,19 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def resolve_window(days: int) -> tuple[datetime, datetime]:
     until = datetime.now(timezone.utc)
     return until - timedelta(days=days), until
+
+
+def apply_commit_counts(members: list[Member], commit_counts: dict[str, int]) -> None:
+    """Replace each member's commit count with the REST-derived figure.
+
+    GraphQL's org-scoped contributionsCollection reports 0 commits for any
+    member whose activity is entirely in private repos, so the REST commit
+    tally (keyed by lowercased login) is the source of truth for this field.
+    Every other Contributions field stays exactly as GraphQL supplied it.
+    """
+    for member in members:
+        count = commit_counts.get(member.login.lower(), 0)
+        member.contributions = replace(member.contributions, commits=count)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -109,6 +124,13 @@ async def _run(args: argparse.Namespace, token: str) -> int:
 
         print(f"Fetching contributions for the last {args.days} days…")
         await api.fetch_contributions(members, organization.node_id, since, until)
+
+        repos_to_scan = await find_scannable_repos(api, organization.login, since)
+        print(f"Counting commits across {len(repos_to_scan)} repositories…")
+        commit_counts = await count_org_commits(
+            api, organization.login, since, until, repos=repos_to_scan
+        )
+        apply_commit_counts(members, commit_counts)
 
         scrape_failures = 0
         if args.no_achievements:

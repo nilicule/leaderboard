@@ -2,7 +2,8 @@ from datetime import timedelta
 
 import pytest
 
-from leaderboard.cli import main, parse_args, resolve_window
+from leaderboard.cli import apply_commit_counts, main, parse_args, resolve_window
+from leaderboard.models import Contributions, Member
 
 
 def test_org_is_required():
@@ -55,3 +56,32 @@ def test_days_must_be_positive(monkeypatch, capsys):
     monkeypatch.setenv("GITHUB_TOKEN", "x")
     assert main(["acme", "--days", "0"]) == 2
     assert "365" in capsys.readouterr().err
+
+
+def _member(login, commits=0):
+    return Member(
+        login=login,
+        name=None,
+        avatar_url="",
+        profile_url="",
+        contributions=Contributions(commits=commits, pull_requests=9, reviews=9, issues=9),
+    )
+
+
+def test_apply_commit_counts_replaces_commits_matching_lowercased_login():
+    members = [_member("Alice", commits=3)]
+    apply_commit_counts(members, {"alice": 42})
+    assert members[0].contributions.commits == 42
+
+
+def test_apply_commit_counts_defaults_to_zero_when_absent():
+    members = [_member("bob", commits=7)]
+    apply_commit_counts(members, {})
+    assert members[0].contributions.commits == 0
+
+
+def test_apply_commit_counts_leaves_other_contribution_fields_untouched():
+    members = [_member("carol", commits=1)]
+    apply_commit_counts(members, {"carol": 5})
+    contributions = members[0].contributions
+    assert (contributions.pull_requests, contributions.reviews, contributions.issues) == (9, 9, 9)

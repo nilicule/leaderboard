@@ -89,7 +89,7 @@ class GitHubClient:
             "X-GitHub-Api-Version": "2022-11-28",
         }
 
-    async def _request(self, method: str, url: str, **kwargs) -> httpx.Response:
+    async def request(self, method: str, url: str, **kwargs) -> httpx.Response:
         for attempt in range(MAX_ATTEMPTS):
             response = await self._client.request(
                 method, url, headers=self._headers, **kwargs
@@ -105,7 +105,7 @@ class GitHubClient:
         raise GitHubError("Unreachable retry state")
 
     async def get_organization(self, org: str) -> Organization:
-        response = await self._request("GET", f"{REST_ROOT}/orgs/{org}")
+        response = await self.request("GET", f"{REST_ROOT}/orgs/{org}")
         if response.status_code == 404:
             raise GitHubError(
                 f"No organisation named '{org}' is visible to this token. "
@@ -130,7 +130,7 @@ class GitHubClient:
         members: list[Member] = []
         page = 1
         while True:
-            response = await self._request(
+            response = await self.request(
                 "GET",
                 f"{REST_ROOT}/orgs/{org}/members",
                 params={"per_page": 100, "page": page},
@@ -175,7 +175,7 @@ class GitHubClient:
 
         for start in range(0, len(logins), BATCH_SIZE):
             chunk = logins[start : start + BATCH_SIZE]
-            response = await self._request(
+            response = await self.request(
                 "POST",
                 GRAPHQL_URL,
                 json={
