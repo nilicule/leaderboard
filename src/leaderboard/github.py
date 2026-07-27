@@ -4,11 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import json
-from datetime import datetime
 
 import httpx
 
-from .models import Contributions, Member, Organization
+from .models import Member, Organization
 
 REST_ROOT = "https://api.github.com"
 GRAPHQL_URL = "https://api.github.com/graphql"
@@ -20,22 +19,15 @@ BATCH_SIZE = 20
 MAX_ATTEMPTS = 3
 MAX_RETRY_DELAY = 60.0
 
-_STATS_FRAGMENT = """
-fragment Stats on User {
+# Only what the report displays. Every contribution count comes from the REST
+# commit scan (commits.py) and the search API (activity.py) instead, because
+# contributionsCollection reports nothing at all for private repositories.
+_PROFILE_FRAGMENT = """
+fragment Profile on User {
   login
   name
   avatarUrl(size: 96)
   url
-  contributionsCollection(organizationID: $orgId, from: $from, to: $to) {
-    totalCommitContributions
-    totalPullRequestContributions
-    totalPullRequestReviewContributions
-    totalIssueContributions
-    totalRepositoriesWithContributedCommits
-  }
-  unfilteredContributionsCollection: contributionsCollection(from: $from, to: $to) {
-    restrictedContributionsCount
-  }
 }
 """
 
@@ -44,18 +36,13 @@ class GitHubError(Exception):
     """An error worth showing to the operator verbatim."""
 
 
-def build_contributions_query(logins: list[str]) -> str:
+def build_profile_query(logins: list[str]) -> str:
     """Build a GraphQL query aliasing one user selection per login."""
     selections = "\n".join(
-        f"  u{index}: user(login: {json.dumps(login)}) {{ ...Stats }}"
+        f"  u{index}: user(login: {json.dumps(login)}) {{ ...Profile }}"
         for index, login in enumerate(logins)
     )
-    return (
-        "query($orgId: ID!, $from: DateTime!, $to: DateTime!) {\n"
-        f"{selections}\n"
-        "}\n"
-        f"{_STATS_FRAGMENT}"
-    )
+    return "query {\n" + selections + "\n}\n" + _PROFILE_FRAGMENT
 
 
 def retry_delay(response: httpx.Response, attempt: int) -> float:
@@ -129,16 +116,14 @@ class GitHubClient:
         response.raise_for_status()
         data = response.json()
         login = data.get("login")
-        node_id = data.get("node_id")
-        if not login or not node_id:
+        if not login:
             raise GitHubError(
                 f"GitHub returned an unexpected response for organisation '{org}' "
-                "(missing 'login' or 'node_id')."
+                "(missing 'login')."
             )
         return Organization(
             login=login,
             name=data.get("name") or login,
-            node_id=node_id,
             avatar_url=data.get("avatar_url", ""),
         )
 
@@ -174,17 +159,12 @@ class GitHubClient:
             page += 1
         return members
 
-    async def fetch_contributions(
-        self,
-        members: list[Member],
-        org_id: str,
-        since: datetime,
-        until: datetime,
-    ) -> None:
-        """Populate each member's contributions in place.
+    async def fetch_profiles(self, members: list[Member]) -> None:
+        """Populate each member's display name, avatar and profile URL in place.
 
-        A member GitHub returns no data for is flagged via `stats_missing`
-        rather than dropped, so they still appear on the leaderboard.
+        A member GitHub returns no node for is flagged via `profile_missing`
+        rather than dropped, so they still appear on the leaderboard with the
+        details the REST member listing already supplied.
         """
         by_login = {member.login: member for member in members}
         logins = list(by_login)
@@ -194,19 +174,12 @@ class GitHubClient:
             response = await self.request(
                 "POST",
                 GRAPHQL_URL,
-                json={
-                    "query": build_contributions_query(chunk),
-                    "variables": {
-                        "orgId": org_id,
-                        "from": since.isoformat(),
-                        "to": until.isoformat(),
-                    },
-                },
+                json={"query": build_profile_query(chunk)},
             )
             if response.status_code in (401, 403):
                 raise GitHubError(
-                    "GitHub refused to fetch contributions data. "
-                    "Check that GITHUB_TOKEN is valid and carries the 'read:org' and 'repo' scopes."
+                    "GitHub refused to fetch member profiles. "
+                    "Check that GITHUB_TOKEN is valid and carries the 'read:org' scope."
                 )
             response.raise_for_status()
             body = response.json()
@@ -214,30 +187,14 @@ class GitHubClient:
 
             if not data and body.get("errors"):
                 message = body["errors"][0].get("message", "unknown error")
-                raise GitHubError(f"GitHub rejected the contributions query: {message}")
+                raise GitHubError(f"GitHub rejected the profile query: {message}")
 
             for index, login in enumerate(chunk):
                 node = data.get(f"u{index}")
                 member = by_login[login]
                 if not node:
-                    member.stats_missing = True
+                    member.profile_missing = True
                     continue
-                self._apply_node(member, node)
-
-    @staticmethod
-    def _apply_node(member: Member, node: dict) -> None:
-        collection = node.get("contributionsCollection") or {}
-        # organizationID scoping makes GitHub always report restrictedContributionsCount
-        # as 0, so the real count is read from the unfiltered collection instead.
-        unfiltered = node.get("unfilteredContributionsCollection") or {}
-        member.name = node.get("name")
-        member.avatar_url = node.get("avatarUrl") or member.avatar_url
-        member.profile_url = node.get("url") or member.profile_url
-        member.contributions = Contributions(
-            commits=collection.get("totalCommitContributions", 0),
-            pull_requests=collection.get("totalPullRequestContributions", 0),
-            reviews=collection.get("totalPullRequestReviewContributions", 0),
-            issues=collection.get("totalIssueContributions", 0),
-            repositories=collection.get("totalRepositoriesWithContributedCommits", 0),
-            restricted=unfiltered.get("restrictedContributionsCount", 0),
-        )
+                member.name = node.get("name")
+                member.avatar_url = node.get("avatarUrl") or member.avatar_url
+                member.profile_url = node.get("url") or member.profile_url

@@ -120,12 +120,55 @@ async def test_tallies_commits_across_multiple_repos():
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
         api = GitHubClient(token="fake", client=http)
-        result, failed = await count_org_commits(
+        result, repos, failed = await count_org_commits(
             api, [_repo("one"), _repo("two")], SINCE, UNTIL
         )
 
     assert result == {"alice": 2, "bob": 1}
     assert failed == 0
+
+
+@pytest.mark.asyncio
+async def test_also_tallies_how_many_repos_each_author_committed_to():
+    # totalRepositoriesWithContributedCommits is restricted for private repos
+    # just like the commit count is, but the scan already knows the answer.
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/repos/acme/one/commits":
+            return httpx.Response(200, json=[_commit("alice"), _commit("bob")])
+        if request.url.path == "/repos/acme/two/commits":
+            return httpx.Response(200, json=[_commit("alice")])
+        raise AssertionError(f"unexpected request: {request.url}")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        api = GitHubClient(token="fake", client=http)
+        _, repos, _ = await count_org_commits(
+            api, [_repo("one"), _repo("two")], SINCE, UNTIL
+        )
+
+    assert repos == {"alice": 2, "bob": 1}
+
+
+@pytest.mark.asyncio
+async def test_a_repo_is_counted_once_however_many_pages_of_commits_it_has():
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/repos/acme/one/commits":
+            if request.url.params.get("page") == "2":
+                return httpx.Response(200, json=[_commit("alice")])
+            return httpx.Response(
+                200,
+                json=[_commit("alice")],
+                headers={
+                    "Link": '<https://api.github.com/repos/acme/one/commits?page=2>; rel="next"'
+                },
+            )
+        raise AssertionError(f"unexpected request: {request.url}")
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        api = GitHubClient(token="fake", client=http)
+        counts, repos, _ = await count_org_commits(api, [_repo("one")], SINCE, UNTIL)
+
+    assert counts == {"alice": 2}
+    assert repos == {"alice": 1}
 
 
 @pytest.mark.asyncio
@@ -145,7 +188,7 @@ async def test_follows_link_header_pagination():
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
         api = GitHubClient(token="fake", client=http)
-        result, failed = await count_org_commits(api, [_repo("one")], SINCE, UNTIL)
+        result, _, failed = await count_org_commits(api, [_repo("one")], SINCE, UNTIL)
 
     assert result == {"bob": 1, "alice": 1}
 
@@ -163,7 +206,7 @@ async def test_pagination_refuses_to_follow_a_next_link_to_another_host():
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
         api = GitHubClient(token="fake", client=http)
-        result, failed = await count_org_commits(api, [_repo("one")], SINCE, UNTIL)
+        result, _, failed = await count_org_commits(api, [_repo("one")], SINCE, UNTIL)
 
     assert result == {"bob": 1}
     assert failed == 0
@@ -178,7 +221,7 @@ async def test_skips_commits_with_no_linked_author():
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
         api = GitHubClient(token="fake", client=http)
-        result, failed = await count_org_commits(api, [_repo("one")], SINCE, UNTIL)
+        result, _, failed = await count_org_commits(api, [_repo("one")], SINCE, UNTIL)
 
     assert result == {"alice": 1}
 
@@ -194,7 +237,7 @@ async def test_a_409_empty_repository_is_skipped_without_failing():
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
         api = GitHubClient(token="fake", client=http)
-        result, failed = await count_org_commits(
+        result, _, failed = await count_org_commits(
             api, [_repo("empty"), _repo("real")], SINCE, UNTIL
         )
 
@@ -213,7 +256,7 @@ async def test_a_404_repository_is_skipped_without_failing():
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
         api = GitHubClient(token="fake", client=http)
-        result, failed = await count_org_commits(
+        result, _, failed = await count_org_commits(
             api, [_repo("gone"), _repo("real")], SINCE, UNTIL
         )
 
@@ -232,7 +275,7 @@ async def test_a_failing_repo_does_not_abort_the_whole_scan():
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
         api = GitHubClient(token="fake", client=http)
-        counts, failed = await count_org_commits(
+        counts, _, failed = await count_org_commits(
             api, [_repo("broken"), _repo("real")], SINCE, UNTIL
         )
 
@@ -251,7 +294,7 @@ async def test_a_repo_whose_request_raises_is_counted_as_failed_not_fatal():
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
         api = GitHubClient(token="fake", client=http)
-        counts, failed = await count_org_commits(
+        counts, _, failed = await count_org_commits(
             api, [_repo("explodes"), _repo("real")], SINCE, UNTIL
         )
 
@@ -268,7 +311,7 @@ async def test_no_failures_reports_zero():
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
         api = GitHubClient(token="fake", client=http)
-        counts, failed = await count_org_commits(api, [_repo("one")], SINCE, UNTIL)
+        counts, _, failed = await count_org_commits(api, [_repo("one")], SINCE, UNTIL)
 
     assert counts == {"alice": 1}
     assert failed == 0
@@ -283,7 +326,7 @@ async def test_other_errors_are_fail_soft_too():
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
         api = GitHubClient(token="fake", client=http)
-        counts, failed = await count_org_commits(api, [_repo("broken")], SINCE, UNTIL)
+        counts, _, failed = await count_org_commits(api, [_repo("broken")], SINCE, UNTIL)
 
     assert counts == {}
     assert failed == 1
@@ -300,6 +343,6 @@ async def test_login_matching_is_case_insensitive_via_lowercasing():
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
         api = GitHubClient(token="fake", client=http)
-        result, failed = await count_org_commits(api, [_repo("one")], SINCE, UNTIL)
+        result, _, failed = await count_org_commits(api, [_repo("one")], SINCE, UNTIL)
 
     assert result == {"alicen2g": 2}

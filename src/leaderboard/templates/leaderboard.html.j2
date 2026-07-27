@@ -90,14 +90,11 @@
     </div>
   </header>
 
-  {% if restricted_total %}
+  {% if activity_failures %}
   <p class="notice">
-    Pull request, review and issue counts are a lower bound. GitHub declines to
-    attribute {{ restricted_total }} contribution{{ '' if restricted_total == 1 else 's' }}
-    for these members across all of GitHub — commit counts are read from the
-    repository API and are unaffected. No token scope changes this; each member
-    controls it via <em>Include private contributions on my profile</em> in their
-    own account settings.
+    Pull requests, reviews and issues could not be searched for
+    {{ activity_failures }} member{{ '' if activity_failures == 1 else 's' }};
+    those three columns read zero for them. Their commit counts are unaffected.
   </p>
   {% endif %}
   {% if scrape_failures %}
@@ -161,7 +158,7 @@
             <span>
               <a href="{{ entry.member.profile_url }}">{{ entry.member.display_name }}</a><br>
               <span class="login">@{{ entry.member.login }}</span>
-              {% if entry.member.stats_missing %}<span class="missing"> · no PR/review/issue data</span>{% endif %}
+              {% if entry.member.activity_missing %}<span class="missing"> · no PR/review/issue data</span>{% endif %}
             </span>
           </span>
         </td>

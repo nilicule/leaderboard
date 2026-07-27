@@ -1,5 +1,3 @@
-from datetime import datetime, timezone
-
 import httpx
 import pytest
 
@@ -8,53 +6,30 @@ from leaderboard.github import (
     GitHubClient,
     GitHubError,
     _is_rate_limited,
-    build_contributions_query,
+    build_profile_query,
     retry_delay,
 )
 from leaderboard.models import Member
 
 
 def test_query_aliases_every_login():
-    query = build_contributions_query(["alice", "bob"])
+    query = build_profile_query(["alice", "bob"])
     assert "u0: user(login: \"alice\")" in query
     assert "u1: user(login: \"bob\")" in query
 
 
-def test_query_requests_every_metric_we_score_on():
-    query = build_contributions_query(["alice"])
-    for field in (
-        "totalCommitContributions",
-        "totalPullRequestContributions",
-        "totalPullRequestReviewContributions",
-        "totalIssueContributions",
-        "totalRepositoriesWithContributedCommits",
-        "restrictedContributionsCount",
-    ):
+def test_query_requests_only_the_profile_details_the_report_displays():
+    # Contribution counts all come from the REST scan and the search API now,
+    # because contributionsCollection cannot see private repositories.
+    query = build_profile_query(["alice"])
+    for field in ("login", "name", "avatarUrl", "url"):
         assert field in query
-
-
-def test_query_scopes_contributions_to_the_organisation():
-    query = build_contributions_query(["alice"])
-    assert "organizationID: $orgId" in query
-    assert "query($orgId: ID!, $from: DateTime!, $to: DateTime!)" in query
-
-
-def test_query_also_requests_an_unfiltered_collection_for_restricted_count():
-    # organizationID scoping makes GitHub always report restrictedContributionsCount
-    # as 0, even when the user has restricted contributions. An additional,
-    # unfiltered collection is the only way to see the real count.
-    query = build_contributions_query(["alice"])
-    assert "contributionsCollection(from: $from, to: $to)" in query
-    # The unfiltered collection must not itself carry the org filter.
-    unfiltered_line = next(
-        line for line in query.splitlines() if "contributionsCollection(from: $from, to: $to)" in line
-    )
-    assert "organizationID" not in unfiltered_line
+    assert "contributionsCollection" not in query
 
 
 def test_logins_are_escaped_rather_than_interpolated_raw():
     # A login can never contain a quote, but the query must not be breakable.
-    query = build_contributions_query(['a"b'])
+    query = build_profile_query(['a"b'])
     assert '\\"' in query
 
 
@@ -103,7 +78,7 @@ def test_403_mentioning_secondary_rate_limit_in_body_is_rate_limited():
 @pytest.mark.asyncio
 async def test_get_organization_raises_a_clear_error_on_a_malformed_payload():
     def handler(request: httpx.Request) -> httpx.Response:
-        # Missing "login" and "node_id" — must not raise a bare KeyError.
+        # Missing "login" — must not raise a bare KeyError.
         return httpx.Response(200, json={"name": "Acme"})
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
@@ -141,42 +116,42 @@ def test_403_with_remaining_and_no_retry_after_or_secondary_message_is_not_rate_
 
 
 @pytest.mark.asyncio
-async def test_fetch_contributions_reads_restricted_count_from_the_unfiltered_collection():
-    # The org-filtered collection always reports restrictedContributionsCount as 0
-    # (that is the bug); the unfiltered one carries the true count.
+async def test_fetch_profiles_fills_in_display_name_and_avatar():
     def handler(request: httpx.Request) -> httpx.Response:
-        body = {
-            "data": {
-                "u0": {
-                    "login": "alice",
-                    "name": "Alice",
-                    "avatarUrl": "https://example.test/alice.png",
-                    "url": "https://github.com/alice",
-                    "contributionsCollection": {
-                        "totalCommitContributions": 3,
-                        "totalPullRequestContributions": 1,
-                        "totalPullRequestReviewContributions": 0,
-                        "totalIssueContributions": 0,
-                        "totalRepositoriesWithContributedCommits": 2,
-                        "restrictedContributionsCount": 0,
-                    },
-                    "unfilteredContributionsCollection": {
-                        "restrictedContributionsCount": 677,
-                    },
+        return httpx.Response(
+            200,
+            json={
+                "data": {
+                    "u0": {
+                        "login": "alice",
+                        "name": "Alice",
+                        "avatarUrl": "https://example.test/alice.png",
+                        "url": "https://github.com/alice",
+                    }
                 }
-            }
-        }
-        return httpx.Response(200, json=body)
+            },
+        )
 
     members = [Member(login="alice", name=None, avatar_url="", profile_url="")]
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
         client = GitHubClient(token="fake-token", client=http_client)
-        await client.fetch_contributions(
-            members,
-            org_id="O_1",
-            since=datetime(2025, 1, 1, tzinfo=timezone.utc),
-            until=datetime(2026, 1, 1, tzinfo=timezone.utc),
-        )
+        await client.fetch_profiles(members)
 
-    assert members[0].contributions.restricted == 677
-    assert members[0].contributions.commits == 3
+    assert members[0].name == "Alice"
+    assert members[0].avatar_url == "https://example.test/alice.png"
+    assert members[0].profile_url == "https://github.com/alice"
+    assert members[0].profile_missing is False
+
+
+@pytest.mark.asyncio
+async def test_a_member_github_returns_no_profile_for_is_flagged_not_dropped():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"data": {"u0": None}})
+
+    members = [Member(login="ghost", name=None, avatar_url="", profile_url="")]
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http_client:
+        client = GitHubClient(token="fake-token", client=http_client)
+        await client.fetch_profiles(members)
+
+    assert members[0].profile_missing is True
+    assert members[0].login == "ghost"

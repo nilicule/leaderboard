@@ -25,7 +25,6 @@ class Contributions:
     reviews: int = 0
     issues: int = 0
     repositories: int = 0
-    restricted: int = 0
 
 
 @dataclass
@@ -38,7 +37,12 @@ class Member:
     profile_url: str
     contributions: Contributions = field(default_factory=Contributions)
     achievements: list[Achievement] = field(default_factory=list)
-    stats_missing: bool = False
+    # GitHub returned no profile node for this member: their display name and
+    # avatar fall back to the REST member listing, everything else is unaffected.
+    profile_missing: bool = False
+    # The pull request / review / issue search did not cover this member, so
+    # those three columns are zero for want of an answer, not because they are.
+    activity_missing: bool = False
 
     @property
     def display_name(self) -> str:
@@ -56,5 +60,4 @@ class ScoredMember:
 class Organization:
     login: str
     name: str
-    node_id: str
     avatar_url: str

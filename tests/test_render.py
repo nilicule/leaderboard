@@ -6,7 +6,7 @@ import pytest
 from leaderboard.models import Achievement, Contributions, Member, Organization, ScoredMember
 from leaderboard.render import PLACEHOLDER_IMAGE, build_image_cache, render_html
 
-ORG = Organization(login="acme", name="Acme", node_id="O_1", avatar_url="https://x/org.png")
+ORG = Organization(login="acme", name="Acme", avatar_url="https://x/org.png")
 NOW = datetime(2026, 7, 24, 12, 0, tzinfo=timezone.utc)
 
 
@@ -27,9 +27,9 @@ def render(ranked, images=None, **kwargs) -> str:
         images=images or {},
         days=365,
         generated_at=NOW,
-        restricted_total=0,
         scrape_failures=0,
         repo_failures=0,
+        activity_failures=0,
         image_failures=0,
     )
     return render_html(ORG, ranked, **{**defaults, **kwargs})
@@ -106,16 +106,14 @@ def test_scores_and_metrics_appear():
     assert "@alice" in html
 
 
-def test_restricted_contributions_are_disclosed():
-    html = render([scored("alice", 1, 10)], restricted_total=17)
-    assert "17" in html
-    assert "across all of GitHub" in html
-    assert "commit counts are read from the" in html.lower()
+def test_activity_failures_are_disclosed():
+    html = render([scored("alice", 1, 10)], activity_failures=2)
+    assert "2 members" in html
 
 
-def test_no_disclosure_when_nothing_was_restricted():
-    html = render([scored("alice", 1, 10)], restricted_total=0)
-    assert "across all of GitHub" not in html
+def test_no_activity_failure_notice_when_zero():
+    html = render([scored("alice", 1, 10)], activity_failures=0)
+    assert "could not be searched" not in html
 
 
 def test_scrape_failures_are_disclosed():
@@ -167,14 +165,14 @@ def test_empty_leaderboard_renders_a_placeholder():
     assert "No members" in html
 
 
-def test_stats_missing_wording_does_not_imply_no_data_at_all():
-    # A stats_missing member can still have a real REST commit count and a
-    # non-zero score, so "no data" overstates it.
+def test_a_member_the_activity_search_missed_is_marked_in_the_table():
+    # Their zeroes would otherwise be indistinguishable from a real zero, and
+    # they still have a genuine REST commit count, so "no data" overstates it.
     entry = scored("alice", 1, 10)
-    entry.member.stats_missing = True
+    entry.member.activity_missing = True
     html = render([entry])
     assert "no PR/review/issue data" in html
-    assert "· no data" not in html
+    assert "\u00b7 no data" not in html
 
 
 @pytest.mark.asyncio

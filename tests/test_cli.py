@@ -2,8 +2,10 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from leaderboard.activity import Activity
 from leaderboard.cli import (
     EXIT_CONFIG,
+    apply_activity_counts,
     apply_commit_counts,
     main,
     parse_args,
@@ -77,44 +79,58 @@ def _member(login, commits=0):
 
 def test_apply_commit_counts_replaces_commits_matching_lowercased_login():
     members = [_member("Alice", commits=3)]
-    apply_commit_counts(members, {"alice": 42})
+    apply_commit_counts(members, {"alice": 42}, {"alice": 6})
     assert members[0].contributions.commits == 42
 
 
 def test_apply_commit_counts_defaults_to_zero_when_absent():
     members = [_member("bob", commits=7)]
-    apply_commit_counts(members, {})
+    apply_commit_counts(members, {}, {})
     assert members[0].contributions.commits == 0
+
+
+def test_apply_commit_counts_also_sets_the_repository_count():
+    members = [_member("Alice", commits=3)]
+    apply_commit_counts(members, {"alice": 42}, {"alice": 6})
+    assert members[0].contributions.repositories == 6
 
 
 def test_apply_commit_counts_leaves_other_contribution_fields_untouched():
     members = [_member("carol", commits=1)]
-    apply_commit_counts(members, {"carol": 5})
+    apply_commit_counts(members, {"carol": 5}, {"carol": 2})
     contributions = members[0].contributions
     assert (contributions.pull_requests, contributions.reviews, contributions.issues) == (9, 9, 9)
 
 
+def test_apply_activity_counts_replaces_pull_requests_reviews_and_issues():
+    members = [_member("Alice")]
+    apply_activity_counts(members, {"alice": Activity(pull_requests=4, reviews=3, issues=2)})
+    contributions = members[0].contributions
+    assert (contributions.pull_requests, contributions.reviews, contributions.issues) == (4, 3, 2)
+
+
+def test_apply_activity_counts_leaves_commits_untouched():
+    members = [_member("alice", commits=11)]
+    apply_activity_counts(members, {"alice": Activity(pull_requests=4)})
+    assert members[0].contributions.commits == 11
+
+
+def test_apply_activity_counts_flags_a_member_the_search_could_not_cover():
+    # Zeroes from a failed search must not read as a member who opened nothing.
+    members = [_member("alice"), _member("bob")]
+    apply_activity_counts(members, {"alice": Activity(pull_requests=4)})
+    assert members[0].activity_missing is False
+    assert members[1].activity_missing is True
+    assert members[1].contributions.pull_requests == 0
+
+
 def _organization():
-    return Organization(login="acme", name="Acme", node_id="O_1", avatar_url="")
+    return Organization(login="acme", name="Acme", avatar_url="")
 
 
 def _scored(login, rank, score, commits=0):
     member = _member(login, commits=commits)
     return ScoredMember(member=member, score=score, rank=rank)
-
-
-def test_print_summary_reports_restricted_total_passed_in_not_recomputed(capsys):
-    from leaderboard.cli import _print_summary
-
-    members = [_member("alice")]
-    ranked = [_scored("alice", 1, 10)]
-    _print_summary(
-        _organization(), ranked, members, scrape_failures=0, repo_failures=0,
-        restricted_total=99, output="out.html",
-    )
-    out = capsys.readouterr().out
-    assert "99 contributions" in out
-    assert "across all of GitHub" in out
 
 
 def test_print_summary_reports_repo_failures_when_nonzero(capsys):
@@ -124,7 +140,7 @@ def test_print_summary_reports_repo_failures_when_nonzero(capsys):
     ranked = [_scored("alice", 1, 10)]
     _print_summary(
         _organization(), ranked, members, scrape_failures=0, repo_failures=4,
-        restricted_total=0, output="out.html",
+        activity_failures=0, output="out.html",
     )
     out = capsys.readouterr().out
     assert "4 repositor" in out
@@ -137,10 +153,23 @@ def test_print_summary_omits_repo_failure_note_when_zero(capsys):
     ranked = [_scored("alice", 1, 10)]
     _print_summary(
         _organization(), ranked, members, scrape_failures=0, repo_failures=0,
-        restricted_total=0, output="out.html",
+        activity_failures=0, output="out.html",
     )
     out = capsys.readouterr().out
     assert "repositor" not in out
+
+
+def test_print_summary_reports_members_the_activity_search_missed(capsys):
+    from leaderboard.cli import _print_summary
+
+    members = [_member("alice")]
+    ranked = [_scored("alice", 1, 10)]
+    _print_summary(
+        _organization(), ranked, members, scrape_failures=0, repo_failures=0,
+        activity_failures=3, output="out.html",
+    )
+    out = capsys.readouterr().out
+    assert "3 member" in out
 
 
 def test_write_report_writes_the_file(tmp_path):

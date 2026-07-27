@@ -50,6 +50,7 @@ async def _count_repo_commits(
     since: datetime,
     until: datetime,
     tally: dict[str, int],
+    repo_tally: dict[str, int],
     lock: asyncio.Lock,
     semaphore: asyncio.Semaphore,
 ) -> None:
@@ -60,14 +61,18 @@ async def _count_repo_commits(
         "per_page": 100,
     }
 
+    # Accumulated across every page and merged once at the end, so that an
+    # author who appears on three pages of this repo still counts as having
+    # contributed to one repository.
+    counts: dict[str, int] = {}
+
     async with semaphore:
         while url is not None:
             response = await api.request("GET", url, params=params)
             if response.status_code in (404, 409):
-                return
+                break
             response.raise_for_status()
 
-            counts: dict[str, int] = {}
             for commit in response.json():
                 author = commit.get("author")
                 if not author:
@@ -78,11 +83,6 @@ async def _count_repo_commits(
                 key = login.lower()
                 counts[key] = counts.get(key, 0) + 1
 
-            if counts:
-                async with lock:
-                    for key, count in counts.items():
-                        tally[key] = tally.get(key, 0) + count
-
             next_url = response.links.get("next", {}).get("url")
             if next_url and urlparse(next_url).netloc != "api.github.com":
                 # An authenticated request only ever goes back to the API host
@@ -91,6 +91,12 @@ async def _count_repo_commits(
                 next_url = None
             url = next_url
             params = None
+
+    if counts:
+        async with lock:
+            for key, count in counts.items():
+                tally[key] = tally.get(key, 0) + count
+                repo_tally[key] = repo_tally.get(key, 0) + 1
 
 
 async def find_scannable_repos(
@@ -117,23 +123,24 @@ async def count_org_commits(
     since: datetime,
     until: datetime,
     concurrency: int = 8,
-) -> tuple[dict[str, int], int]:
-    """Return (lowercased-login -> commit count, number of repos that failed).
+) -> tuple[dict[str, int], dict[str, int], int]:
+    """Return (login -> commit count, login -> repos committed to, failed repos).
 
-    A repo whose request errors (rate limit exhaustion, a transient 5xx, a
-    network error, ...) is counted as failed rather than aborting the whole
-    scan — losing a handful of repos out of hundreds is far better than
-    discarding the entire run. Pass `repos` as returned by
-    `find_scannable_repos`.
+    Both tallies are keyed by lowercased login. A repo whose request errors
+    (rate limit exhaustion, a transient 5xx, a network error, ...) is counted
+    as failed rather than aborting the whole scan — losing a handful of repos
+    out of hundreds is far better than discarding the entire run. Pass `repos`
+    as returned by `find_scannable_repos`.
     """
     tally: dict[str, int] = {}
+    repo_tally: dict[str, int] = {}
     lock = asyncio.Lock()
     semaphore = asyncio.Semaphore(concurrency)
 
     results = await asyncio.gather(
         *(
             _count_repo_commits(
-                api, repo["full_name"], since, until, tally, lock, semaphore
+                api, repo["full_name"], since, until, tally, repo_tally, lock, semaphore
             )
             for repo in repos
         ),
@@ -141,4 +148,4 @@ async def count_org_commits(
     )
 
     failed = sum(1 for result in results if isinstance(result, BaseException))
-    return tally, failed
+    return tally, repo_tally, failed

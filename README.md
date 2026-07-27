@@ -9,8 +9,9 @@ showing each member's avatar and profile achievement badges.
 - Python 3.13 or newer
 - [uv](https://docs.astral.sh/uv/)
 - A `GITHUB_TOKEN` in the environment with the `read:org` and `repo` scopes.
-  `read:org` enumerates members; `repo` reads commits from private
-  repositories, which is where most of the signal lives in a company org.
+  `read:org` enumerates members; `repo` reads commits, pull requests, reviews
+  and issues from private repositories, which is where most of the signal lives
+  in a company org.
 
 ## Usage
 
@@ -46,35 +47,47 @@ To retune, edit the weight constants at the top of `src/leaderboard/scoring.py`.
 
 ## Where the numbers come from
 
-The two metrics use different GitHub APIs, for a reason worth knowing about.
+Nothing on the leaderboard comes from GitHub's `contributionsCollection`, the
+obvious API for the job, because it does **not** report contributions to
+private repositories. GitHub folds them into `restrictedContributionsCount`
+instead — a count of work it declines to attribute. On an org whose
+repositories are all private that zeroes every column for every member, no
+matter what scopes the token holds; the only way to lift it is for each member
+to enable *Include private contributions on my profile* in their own account
+settings, which an org admin cannot do on their behalf. Both sources below
+sidestep it.
 
-**Commits** are counted from the REST repository API: every org repo pushed
-within the window is scanned via `/repos/{owner}/{repo}/commits`, and commits
-are tallied by author login. Only commits whose email is linked to a GitHub
-account can be attributed; unlinked commits are skipped. Forks are excluded
-from the scan entirely — a fork's commit history is the upstream project's
-history, so scanning it would credit upstream work to this org. Merge commits
-are counted (GitHub's own contribution graph counts them too, and they are a
-meaningful share of commits in an active org), and only commits reachable from
-each repository's default branch are seen, since that is all the endpoint
+**Commits** and **repos** are counted from the REST repository API: every org
+repo pushed within the window is scanned via `/repos/{owner}/{repo}/commits`,
+and commits are tallied by author login. Only commits whose email is linked to
+a GitHub account can be attributed; unlinked commits are skipped. Forks are
+excluded from the scan entirely — a fork's commit history is the upstream
+project's history, so scanning it would credit upstream work to this org. Merge
+commits are counted (GitHub's own contribution graph counts them too, and they
+are a meaningful share of commits in an active org), and only commits reachable
+from each repository's default branch are seen, since that is all the endpoint
 returns.
 
-**Pull requests, reviews and issues** come from the GraphQL
-`contributionsCollection`, scoped to the organisation.
+**Pull requests, reviews and issues** are counted with the search API, which
+with the `repo` scope matches issues and pull requests in every private
+repository the token can read: `author:LOGIN org:ORG type:pr`, `reviewed-by:`,
+and `type:issue`, each bounded by `created:` over the window. Three aliased
+searches per member are batched into one GraphQL request.
 
-The split exists because `contributionsCollection` does **not** report
-contributions to private repositories. GitHub returns them as
-`restrictedContributionsCount` instead — a count of work it declines to
-attribute. On an org whose repositories are all private, that makes the GraphQL
-commit count zero for every member, no matter what scopes the token holds. The
-only way to surface those contributions through that API is for each member to
-enable *Include private contributions on my profile* in their own account
-settings, which is not something an org admin can do on their behalf.
+Search has no qualifier for the date a *review* was submitted, so reviews are
+counted as pull requests created in the window that the member reviewed. On a
+year of a busy org, checked against the review timestamps themselves, that came
+to 8 of a true 8 for one member and 508 of a true 519 for another. The
+alternative, `updated:`, overshot by 50% and 41% — a pull request touched
+during the window may well have been reviewed long before it.
 
-Reading commits from the repository API sidesteps this entirely. Pull request,
-review and issue counts remain subject to it, so the report states how many
-contributions GitHub withheld whenever that number is non-zero — treat those
-three columns as a lower bound.
+### Reading the numbers against a GitHub profile
+
+A profile page's "N contributions in the last year" counts commits, pull
+requests, reviews and issues *together*, across all of GitHub. The Commits
+column here counts commits only, in this org only, so the profile figure is
+normally the larger of the two. Compare it against the sum of the Commits, PRs,
+Reviews and Issues columns instead.
 
 ## A caveat about achievements
 
@@ -91,6 +104,6 @@ whether the page structure still matches what the parser expects.
 uv run pytest
 ```
 
-94 tests covering the scoring maths, the achievement parser (against a saved
-fixture page), the commit counter, the GraphQL query builder and the CLI. None
-of them touch the network.
+111 tests covering the scoring maths, the achievement parser (against a saved
+fixture page), the commit counter, the activity search, the GraphQL query
+builders and the CLI. None of them touch the network.

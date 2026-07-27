@@ -14,6 +14,7 @@ from pathlib import Path
 import httpx
 
 from .achievements import fetch_all_achievements
+from .activity import Activity, count_org_activity
 from .commits import count_org_commits, find_scannable_repos
 from .github import GitHubClient, GitHubError
 from .models import Member, Organization, ScoredMember
@@ -57,17 +58,43 @@ def resolve_window(days: int) -> tuple[datetime, datetime]:
     return until - timedelta(days=days), until
 
 
-def apply_commit_counts(members: list[Member], commit_counts: dict[str, int]) -> None:
-    """Replace each member's commit count with the REST-derived figure.
+def apply_commit_counts(
+    members: list[Member],
+    commit_counts: dict[str, int],
+    repo_counts: dict[str, int],
+) -> None:
+    """Set each member's commit and repository counts from the REST scan.
 
-    GraphQL's org-scoped contributionsCollection reports 0 commits for any
-    member whose activity is entirely in private repos, so the REST commit
-    tally (keyed by lowercased login) is the source of truth for this field.
-    Every other Contributions field stays exactly as GraphQL supplied it.
+    Both tallies are keyed by lowercased login. Members absent from a tally
+    committed nothing in the window.
     """
     for member in members:
-        count = commit_counts.get(member.login.lower(), 0)
-        member.contributions = replace(member.contributions, commits=count)
+        login = member.login.lower()
+        member.contributions = replace(
+            member.contributions,
+            commits=commit_counts.get(login, 0),
+            repositories=repo_counts.get(login, 0),
+        )
+
+
+def apply_activity_counts(
+    members: list[Member], activity: dict[str, Activity]
+) -> None:
+    """Set each member's pull request, review and issue counts from the search.
+
+    A member the search could not cover is flagged via `activity_missing`, so
+    the report can distinguish "opened nothing" from "we could not find out".
+    """
+    for member in members:
+        counts = activity.get(member.login.lower())
+        member.activity_missing = counts is None
+        counts = counts or Activity()
+        member.contributions = replace(
+            member.contributions,
+            pull_requests=counts.pull_requests,
+            reviews=counts.reviews,
+            issues=counts.issues,
+        )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -122,15 +149,21 @@ async def _run(args: argparse.Namespace, token: str) -> int:
             return EXIT_NO_DATA
         print(f"Found {len(members)} members.")
 
-        print(f"Fetching contributions for the last {args.days} days…")
-        await api.fetch_contributions(members, organization.node_id, since, until)
+        print("Fetching member profiles…")
+        await api.fetch_profiles(members)
 
         repos_to_scan = await find_scannable_repos(api, organization.login, since)
         print(f"Counting commits across {len(repos_to_scan)} repositories…")
-        commit_counts, repo_failures = await count_org_commits(
+        commit_counts, repo_counts, repo_failures = await count_org_commits(
             api, repos_to_scan, since, until
         )
-        apply_commit_counts(members, commit_counts)
+        apply_commit_counts(members, commit_counts, repo_counts)
+
+        print(f"Counting pull requests, reviews and issues for the last {args.days} days…")
+        activity, activity_failures = await count_org_activity(
+            api, [m.login for m in members], organization.login, since, until
+        )
+        apply_activity_counts(members, activity)
 
         scrape_failures = 0
         if args.no_achievements:
@@ -140,7 +173,6 @@ async def _run(args: argparse.Namespace, token: str) -> int:
             scrape_failures = await fetch_all_achievements(http, members)
 
         ranked = rank_members(members)
-        restricted_total = sum(m.contributions.restricted for m in members)
 
         print("Embedding images…")
         images, image_failures = await build_image_cache(
@@ -156,9 +188,9 @@ async def _run(args: argparse.Namespace, token: str) -> int:
             images=images,
             days=args.days,
             generated_at=until,
-            restricted_total=restricted_total,
             scrape_failures=scrape_failures,
             repo_failures=repo_failures,
+            activity_failures=activity_failures,
             image_failures=image_failures,
         )
 
@@ -173,7 +205,7 @@ async def _run(args: argparse.Namespace, token: str) -> int:
         members,
         scrape_failures=scrape_failures,
         repo_failures=repo_failures,
-        restricted_total=restricted_total,
+        activity_failures=activity_failures,
         output=output,
     )
 
@@ -206,7 +238,7 @@ def _print_summary(
     *,
     scrape_failures: int,
     repo_failures: int,
-    restricted_total: int,
+    activity_failures: int,
     output: Path,
 ) -> None:
     print(f"\n{organization.name} — top {min(len(ranked), 10)}")
@@ -219,15 +251,14 @@ def _print_summary(
             f"{len(entry.member.achievements):>2} badges"
         )
 
-    if restricted_total:
+    if activity_failures:
         print(
-            f"\nNote: PR, review and issue counts are a lower bound. GitHub declines to\n"
-            f"attribute {restricted_total:,} contributions for these members across all of GitHub;\n"
-            "commit counts come from the repository API and are unaffected."
+            f"\nNote: pull requests, reviews and issues could not be searched for "
+            f"{activity_failures} member(s); those three columns read zero for them."
         )
-    missing = sum(1 for m in members if m.stats_missing)
+    missing = sum(1 for m in members if m.profile_missing)
     if missing:
-        print(f"Note: GitHub returned no statistics for {missing} member(s).")
+        print(f"Note: GitHub returned no profile for {missing} member(s).")
     if scrape_failures:
         print(f"Note: achievement badges were unavailable for {scrape_failures} member(s).")
     if repo_failures:

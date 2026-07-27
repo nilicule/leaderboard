@@ -84,9 +84,9 @@ def render_html(
     images: dict[str, str],
     days: int,
     generated_at: datetime,
-    restricted_total: int,
     scrape_failures: int,
     repo_failures: int = 0,
+    activity_failures: int = 0,
     image_failures: int = 0,
 ) -> str:
     """Render the full report as a single HTML string."""
@@ -98,9 +98,9 @@ def render_html(
         images=images,
         days=days,
         generated_at=generated_at.strftime("%Y-%m-%d %H:%M UTC"),
-        restricted_total=restricted_total,
         scrape_failures=scrape_failures,
         repo_failures=repo_failures,
+        activity_failures=activity_failures,
         image_failures=image_failures,
         org_avatar=images.get(organization.avatar_url, PLACEHOLDER_IMAGE),
         placeholder=PLACEHOLDER_IMAGE,
